@@ -167,5 +167,110 @@ CloudFormation do
   end
 
 
+  Condition('IsScalingEnabled', FnEquals(Ref('EnableScaling'), 'true'))
+  scaling_policy = external_parameters.fetch(:scaling_policy, {})
+  unless scaling_policy.empty?
+
+    IAM_Role(:ServiceECSAutoScaleRole) {
+      Condition 'IsScalingEnabled'
+      AssumeRolePolicyDocument service_role_assume_policy('application-autoscaling')
+      Path '/'
+      Policies ([
+        PolicyName: 'ecs-scaling',
+        PolicyDocument: {
+          Statement: [
+            {
+              Effect: "Allow",
+              Action: ['cloudwatch:DescribeAlarms','cloudwatch:PutMetricAlarm','cloudwatch:DeleteAlarms'],
+              Resource: "*"
+            },
+            {
+              Effect: "Allow",
+              Action: ['ecs:UpdateService','ecs:DescribeServices'],
+              Resource: Ref('EcsFargateService')
+            }
+          ]
+      }])
+    }
+
+    ApplicationAutoScaling_ScalableTarget(:ServiceScalingTarget) {
+      Condition 'IsScalingEnabled'
+      MaxCapacity scaling_policy['max']
+      MinCapacity scaling_policy['min']
+      ResourceId FnJoin( '', [ "service/", Ref('EcsCluster'), "/", FnGetAtt(:EcsFargateService,:Name) ] )
+      RoleARN FnGetAtt(:ServiceECSAutoScaleRole,:Arn)
+      ScalableDimension "ecs:service:DesiredCount"
+      ServiceNamespace "ecs"
+    }
+
+    ApplicationAutoScaling_ScalingPolicy(:ServiceScalingUpPolicy) {
+      Condition 'IsScalingEnabled'
+      PolicyName FnJoin('-', [ Ref('EnvironmentName'), external_parameters[:component_name], "scale-up-policy" ])
+      PolicyType "StepScaling"
+      ScalingTargetId Ref(:ServiceScalingTarget)
+      StepScalingPolicyConfiguration({
+        AdjustmentType: "ChangeInCapacity",
+        Cooldown: scaling_policy['up']['cooldown'] || 300,
+        MetricAggregationType: "Average",
+        StepAdjustments: [{ ScalingAdjustment: scaling_policy['up']['adjustment'].to_s, MetricIntervalLowerBound: 0 }]
+      })
+    }
+
+    ApplicationAutoScaling_ScalingPolicy(:ServiceScalingDownPolicy) {
+      Condition 'IsScalingEnabled'
+      PolicyName FnJoin('-', [ Ref('EnvironmentName'), external_parameters[:component_name], "scale-down-policy" ])
+      PolicyType 'StepScaling'
+      ScalingTargetId Ref(:ServiceScalingTarget)
+      StepScalingPolicyConfiguration({
+        AdjustmentType: "ChangeInCapacity",
+        Cooldown: scaling_policy['down']['cooldown'] || 900,
+        MetricAggregationType: "Average",
+        StepAdjustments: [{ ScalingAdjustment: scaling_policy['down']['adjustment'].to_s, MetricIntervalUpperBound: 0 }]
+      })
+    }
+
+    default_alarm = {}
+    default_alarm['metric_name'] = 'CPUUtilization'
+    default_alarm['namespace'] = 'AWS/ECS'
+    default_alarm['statistic'] = 'Average'
+    default_alarm['period'] = '60'
+    default_alarm['evaluation_periods'] = '5'
+    default_alarm['dimensions'] = [
+      { Name: 'ServiceName', Value: FnGetAtt(:EcsFargateService,:Name)},
+      { Name: 'ClusterName', Value: Ref('EcsCluster')}
+    ]
+
+    CloudWatch_Alarm(:ServiceScaleUpAlarm) {
+      Condition 'IsScalingEnabled'
+      AlarmDescription FnJoin(' ', [Ref('EnvironmentName'), "#{external_parameters[:component_name]} ecs scale up alarm"])
+      MetricName scaling_policy['up']['metric_name'] || default_alarm['metric_name']
+      Namespace scaling_policy['up']['namespace'] || default_alarm['namespace']
+      Statistic scaling_policy['up']['statistic'] || default_alarm['statistic']
+      Period (scaling_policy['up']['period'] || default_alarm['period']).to_s
+      EvaluationPeriods scaling_policy['up']['evaluation_periods'].to_s
+      Threshold scaling_policy['up']['threshold'].to_s
+      AlarmActions [Ref(:ServiceScalingUpPolicy)]
+      ComparisonOperator 'GreaterThanThreshold'
+      Dimensions scaling_policy['up']['dimensions'] || default_alarm['dimensions']
+      TreatMissingData scaling_policy['up']['missing_data'] if scaling_policy['up'].has_key?('missing_data')
+    }
+
+    CloudWatch_Alarm(:ServiceScaleDownAlarm) {
+      Condition 'IsScalingEnabled'
+      AlarmDescription FnJoin(' ', [Ref('EnvironmentName'), "#{external_parameters[:component_name]} ecs scale down alarm"])
+      MetricName scaling_policy['down']['metric_name'] || default_alarm['metric_name']
+      Namespace scaling_policy['down']['namespace'] || default_alarm['namespace']
+      Statistic scaling_policy['down']['statistic'] || default_alarm['statistic']
+      Period (scaling_policy['down']['period'] || default_alarm['period']).to_s
+      EvaluationPeriods scaling_policy['down']['evaluation_periods'].to_s
+      Threshold scaling_policy['down']['threshold'].to_s
+      AlarmActions [Ref(:ServiceScalingDownPolicy)]
+      ComparisonOperator 'LessThanThreshold'
+      Dimensions scaling_policy['down']['dimensions'] || default_alarm['dimensions']
+      TreatMissingData scaling_policy['down']['missing_data'] if scaling_policy['down'].has_key?('missing_data')
+    }
+
+  end
+
   
 end

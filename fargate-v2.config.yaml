@@ -11,3 +11,17 @@ iam_policies:
       - Fn::GetAtt: 
           - LogGroup
           - Arn
+
+# scaling_policy:
+#   min: 2
+#   max: 4
+#   up:
+#     cooldown: 150
+#     threshold: 70
+#     evaluation_periods: 5
+#     adjustment: 2
+#   down:
+#     cooldown: 600
+#     threshold: 70
+#     evaluation_periods: 5
+#     adjustment: -1

@@ -1,0 +1,26 @@
+test_metadata:
+  type: config
+  name: scaling_test
+  description: Scaling test after fixing bug with cooldown period
+
+
+task_definition:
+  proxy:
+    image: nginx
+    ports:
+      - 80
+      
+scaling_policy:
+    min: 2
+    max: 10
+    up:
+      cooldown: 180
+      threshold: 70
+      evaluation_periods: 5
+      adjustment: 2
+    down:
+      cooldown: 600
+      threshold: 55
+      evaluation_periods: 5
+      adjustment: -1
+      missing_data: breaching
